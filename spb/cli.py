@@ -4,7 +4,7 @@ import argparse
 import datetime
 import sys
 
-from . import auth, recipes
+from . import auth, profile, recipes
 from .client import Spotify
 
 
@@ -40,6 +40,17 @@ def _emit(tracks, args, client, default_name, description):
     return 0
 
 
+def _sources(client, given, flag):
+    """Explicit playlists if given, else the 'listened to' ones."""
+    if given:
+        return recipes.resolve_playlists(client, given)
+    found = profile.auto_source_playlists(client.my_playlists())
+    if not found:
+        raise SystemExit("No 'listened to' playlists found. Pass %s." % flag)
+    print("Using: " + ", ".join(p["name"] for p in found) + "\n")
+    return found
+
+
 def cmd_playlists(args):
     client = _connect()
     for playlist in client.my_playlists():
@@ -50,7 +61,7 @@ def cmd_playlists(args):
 
 def cmd_new_releases(args):
     client = _connect()
-    seeds = recipes.resolve_playlists(client, args.source)
+    seeds = _sources(client, args.source, "--source")
     tracks = recipes.new_releases(
         client,
         seeds,
@@ -71,7 +82,7 @@ def cmd_new_releases(args):
 
 def cmd_discover(args):
     client = _connect()
-    excluded = recipes.resolve_playlists(client, args.exclude)
+    excluded = _sources(client, args.exclude, "--exclude")
     tracks, genres = recipes.discover(
         client,
         excluded,
@@ -88,6 +99,61 @@ def cmd_discover(args):
         "Top %d tracks from %d artists in %s, none already in: %s"
         % (args.top, args.artists, "/".join(genres), ", ".join(
             p["name"] for p in excluded)),
+    )
+
+
+def cmd_export(args):
+    client = _connect()
+    if args.source:
+        chosen = recipes.resolve_playlists(client, args.source)
+    else:
+        chosen = profile.auto_source_playlists(client.my_playlists())
+        if not chosen:
+            raise SystemExit(
+                "No 'listened to' playlists found. Pass --source explicitly."
+            )
+        print("Auto-selected: " + ", ".join(p["name"] for p in chosen))
+
+    data = profile.build_profile(client, chosen)
+    profile.write_profile(data, args.out)
+    print(
+        "Wrote %s - %d playlists, %d artists, %d genres."
+        % (
+            args.out,
+            len(data["playlists"]),
+            len(data["artists"]),
+            len(data["genre_counts"]),
+        )
+    )
+    top = list(data["genre_counts"].items())[:10]
+    if top:
+        print("Top genres: " + ", ".join("%s (%d)" % g for g in top))
+    return 0
+
+
+def cmd_build(args):
+    client = _connect()
+    with open(args.from_file) as fh:
+        pairs, skipped = profile.parse_picks(fh.read())
+    if skipped:
+        print("Ignored %d unparseable line(s):" % len(skipped))
+        for line in skipped[:5]:
+            print("  " + line.strip())
+    if not pairs:
+        raise SystemExit("No 'Artist - Title' lines found in " + args.from_file)
+
+    found, missing = profile.resolve_picks(client, pairs)
+    if missing:
+        print("\nNot found on Spotify (%d):" % len(missing))
+        for line in missing:
+            print("  " + line)
+    print()
+    return _emit(
+        found,
+        args,
+        client,
+        "Built from picks - %s" % datetime.date.today().isoformat(),
+        "Assembled from a curated tracklist.",
     )
 
 
@@ -109,8 +175,9 @@ def build_parser():
         "new-releases", parents=[shared], help="recent releases by artists you have"
     )
     new.add_argument(
-        "--source", action="append", required=True,
-        help="seed playlist by name, id, or URL (repeatable)",
+        "--source", action="append",
+        help="seed playlist by name, id, or URL (repeatable); "
+             "defaults to your 'listened to' playlists",
     )
     new.add_argument("--months", type=int, default=12, help="window (default 12)")
     new.add_argument(
@@ -125,8 +192,9 @@ def build_parser():
         "discover", parents=[shared], help="in-genre artists you do not have yet"
     )
     disc.add_argument(
-        "--exclude", action="append", required=True,
-        help="playlist whose artists are already known (repeatable)",
+        "--exclude", action="append",
+        help="playlist whose artists are already known (repeatable); "
+             "defaults to your 'listened to' playlists",
     )
     disc.add_argument(
         "--genre", action="append",
@@ -134,6 +202,23 @@ def build_parser():
     )
     disc.add_argument("--artists", type=int, default=15, help="how many artists")
     disc.add_argument("--top", type=int, default=3, help="top tracks each")
+
+    exp = subparsers.add_parser(
+        "export", help="dump a listening profile as JSON, to share with Claude"
+    )
+    exp.add_argument(
+        "--source", action="append",
+        help="playlist to profile; defaults to your 'listened to' playlists",
+    )
+    exp.add_argument("--out", default="profile.json", help="output path")
+
+    bld = subparsers.add_parser(
+        "build", parents=[shared], help="create a playlist from an 'Artist - Title' list"
+    )
+    bld.add_argument(
+        "--from", dest="from_file", required=True,
+        help="text file of 'Artist - Title' lines",
+    )
 
     return parser
 
@@ -144,6 +229,8 @@ def main(argv=None):
         "playlists": cmd_playlists,
         "new-releases": cmd_new_releases,
         "discover": cmd_discover,
+        "export": cmd_export,
+        "build": cmd_build,
     }
     return handlers[args.command](args)
 
