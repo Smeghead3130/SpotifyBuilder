@@ -59,8 +59,20 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
     result = None
 
     def do_GET(self):
-        query = urllib.parse.urlparse(self.path).query
-        _CallbackHandler.result = urllib.parse.parse_qs(query)
+        parsed = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed.query)
+
+        # Browsers request /favicon.ico alongside the redirect, and some
+        # prefetch the URL bar. Only a request that actually carries the
+        # authorization result counts.
+        if parsed.path != "/callback" or not ("code" in query or "error" in query):
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        if _CallbackHandler.result is None:
+            _CallbackHandler.result = query
+
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
@@ -71,7 +83,14 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
 
 
 def _listen_once(timeout=180):
-    server = http.server.HTTPServer(("127.0.0.1", 8731), _CallbackHandler)
+    _CallbackHandler.result = None
+    try:
+        server = http.server.HTTPServer(("127.0.0.1", 8731), _CallbackHandler)
+    except OSError as exc:
+        raise RuntimeError(
+            "Could not listen on 127.0.0.1:8731 (%s). Something else is using "
+            "that port - close it and try again." % exc
+        )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     deadline = time.time() + timeout
@@ -109,7 +128,13 @@ def _authorize(client_id):
     if "error" in returned:
         raise RuntimeError("Spotify denied authorization: " + returned["error"][0])
     if returned.get("state", [None])[0] != state:
-        raise RuntimeError("state mismatch on the Spotify redirect")
+        raise RuntimeError(
+            "state mismatch on the Spotify redirect - the browser sent back a "
+            "different login attempt than the one just started. Close any "
+            "stale Spotify authorization tabs and run the command again."
+        )
+    if not returned.get("code"):
+        raise RuntimeError("Spotify redirect carried no authorization code")
 
     response = requests.post(
         TOKEN_URL,
