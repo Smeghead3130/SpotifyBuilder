@@ -8,6 +8,7 @@ and turns it into a real playlist.
 
 import json
 import re
+import unicodedata
 
 # Matches "2026 - Music I Listened To", "Music I Listened To 2024",
 # "songs i listened to in 2023", and similar.
@@ -160,3 +161,31 @@ def write_profile(profile, path):
     # diacritics; the file is JSON, so it must be UTF-8 regardless of locale.
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(profile, fh, indent=2, ensure_ascii=False)
+
+
+def drop_known_artists(picks, known_names):
+    """Remove picks whose artist you already have.
+
+    Claude proposes from a partial view of your taste, so the "not already in
+    my playlists" rule is enforced here, against the real library.
+    """
+    known = {_fold(n) for n in known_names}
+    kept, dropped = [], []
+    for pick in picks:
+        # A pick's artist string may carry featured credits; judge the lead.
+        lead = re.split(r"\s*(?:,|&| feat\.| featuring| with )\s*",
+                        pick["artist"], maxsplit=1)[0]
+        if _fold(lead) in known:
+            dropped.append(pick)
+        else:
+            kept.append(pick)
+    return kept, dropped
+
+
+def _fold(name):
+    """Compare artist names ignoring case, accents and a leading 'the'."""
+    folded = unicodedata.normalize("NFKD", name or "")
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    folded = folded.casefold().strip()
+    folded = re.sub(r"^the\s+", "", folded)
+    return re.sub(r"[^a-z0-9]+", "", folded)

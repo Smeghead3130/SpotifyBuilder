@@ -164,6 +164,17 @@ def cmd_build(args):
         raise SystemExit("No 'Artist - Title' lines found in " + args.from_file)
 
     found, missing = profile.resolve_picks(client, pairs)
+
+    if args.exclude_known:
+        seeds = _sources(client, args.exclude, "--exclude")
+        known = profile.artists_in_playlists(client, seeds)
+        found, dropped = profile.drop_known_artists(found, known.values())
+        if dropped:
+            print("Dropped %d pick(s) by artists already in your playlists:"
+                  % len(dropped))
+            for pick in dropped:
+                print("  %s - %s" % (pick["artist"], pick["name"]))
+            print()
     if missing:
         print("\nNot found on Spotify (%d):" % len(missing))
         for line in missing:
@@ -247,6 +258,15 @@ def build_parser():
     bld.add_argument(
         "--from", dest="from_file", required=True,
         help="text file of 'Artist - Title' lines",
+    )
+    bld.add_argument(
+        "--exclude-known", action="store_true",
+        help="drop picks by artists already in your playlists",
+    )
+    bld.add_argument(
+        "--exclude", action="append",
+        help="playlists defining 'already known'; defaults to your "
+             "'listened to' playlists",
     )
 
     return parser

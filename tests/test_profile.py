@@ -68,3 +68,32 @@ def test_build_profile_collects_artists_genres_and_counts():
     assert sorted(data["playlists"][0]["artists"]) == ["Ada", "Bo"]
     assert data["genre_counts"]["shoegaze"] == 2
     assert data["followed"] == ["Followed"]
+
+
+def test_drop_known_artists_matches_across_case_accents_and_the():
+    picks = [
+        {"artist": "Radiohead", "name": "Let Down"},
+        {"artist": "the last dinner party", "name": "Nothing Matters"},
+        {"artist": "Sigur Rós", "name": "Hoppipolla"},
+        {"artist": "Duster", "name": "Constellations"},
+    ]
+    known = ["radiohead", "The Last Dinner Party", "Sigur Ros"]
+    kept, dropped = profile.drop_known_artists(picks, known)
+    assert [p["artist"] for p in kept] == ["Duster"]
+    assert len(dropped) == 3
+
+
+def test_drop_known_artists_judges_the_lead_credit():
+    picks = [
+        {"artist": "Radiohead, Thom Yorke", "name": "x"},
+        {"artist": "Duster feat. Radiohead", "name": "y"},
+    ]
+    kept, dropped = profile.drop_known_artists(picks, ["Radiohead"])
+    assert [p["artist"] for p in kept] == ["Duster feat. Radiohead"]
+    assert len(dropped) == 1
+
+
+def test_drop_known_artists_keeps_everything_when_nothing_is_known():
+    picks = [{"artist": "Duster", "name": "x"}]
+    kept, dropped = profile.drop_known_artists(picks, [])
+    assert len(kept) == 1 and not dropped
