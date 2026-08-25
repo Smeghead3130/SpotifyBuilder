@@ -121,22 +121,26 @@ class Spotify:
             out.extend(self.get("/artists", ids=",".join(chunk)).get("artists") or [])
         return out
 
+    # The albums endpoint began rejecting limit=50 with "Invalid limit" after
+    # the 2026 changes; 20 is accepted.
+    ALBUM_PAGE = 20
+
     def artist_albums(self, artist_id, groups="album,single"):
         return list(
             self.paginate(
                 "/artists/%s/albums" % artist_id,
-                limit=50,
+                limit=self.ALBUM_PAGE,
                 include_groups=groups,
-                market="from_token",
             )
         )
 
     def album_tracks(self, album_id):
         return list(self.paginate("/albums/%s/tracks" % album_id, limit=50))
 
-    def artist_top_tracks(self, artist_id, market="from_token"):
+    def artist_top_tracks(self, artist_id, market=None):
+        params = {"market": market} if market else {}
         return self.get(
-            "/artists/%s/top-tracks" % artist_id, market=market
+            "/artists/%s/top-tracks" % artist_id, **params
         ).get("tracks") or []
 
     def top_artists(self, time_range="medium_term", cap=50):
@@ -181,18 +185,17 @@ class Spotify:
                     raise
                 self.post("/playlists/%s/tracks" % playlist_id, batch)
 
-    def find_track(self, artist, title, market="from_token"):
+    def find_track(self, artist, title, market=None):
         """Resolve an 'artist / title' pair to a track URI. None if no match."""
         query = 'track:"%s" artist:"%s"' % (title.replace('"', ""),
                                             artist.replace('"', ""))
-        page = self.get("/search", q=query, type="track", limit=5, market=market)
+        page = self.get("/search", q=query, type="track", limit=5)
         items = (page.get("tracks") or {}).get("items") or []
         if not items:
             # Fall back to a loose query; quoted field search misses remixes,
             # featured credits and punctuation differences.
             page = self.get(
-                "/search", q="%s %s" % (artist, title), type="track",
-                limit=5, market=market,
+                "/search", q="%s %s" % (artist, title), type="track", limit=5,
             )
             items = (page.get("tracks") or {}).get("items") or []
         return items[0] if items else None

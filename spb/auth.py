@@ -178,6 +178,11 @@ def get_access_token(client_id=None):
         )
 
     tokens = _load()
+    # A cached token minted before a scope was added cannot grant it, so a
+    # changed scope list has to force a fresh authorization.
+    if tokens and tokens.get("scopes") != SCOPES:
+        tokens = None
+
     if tokens and tokens.get("expires_at", 0) > time.time() + 60:
         return tokens["access_token"]
 
@@ -190,5 +195,6 @@ def get_access_token(client_id=None):
         tokens = _authorize(client_id)
 
     tokens["expires_at"] = time.time() + tokens.get("expires_in", 3600)
+    tokens["scopes"] = SCOPES
     _save(tokens)
     return tokens["access_token"]

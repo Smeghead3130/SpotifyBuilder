@@ -64,7 +64,13 @@ def run(client, create_probe=False):
     except SpotifyError:
         pass
 
-    sample_playlist = playlists[0]["id"] if playlists else "37i9dQZF1DXcBWIGoYBM5M"
+    # Development mode only permits playlists you own, so probing someone
+    # else's shared playlist would report a false 403.
+    mine = [p for p in playlists if (p.get("owner") or {}).get("id") == me.get("id")]
+    sample_playlist = (mine or playlists or [{"id": "none"}])[0]["id"]
+    if playlists and not mine:
+        print("Note: none of your playlists appear to be owned by you; the "
+              "playlist probe may report a false 403.")
     sample_artist = "4Z8W4fKeB5YxbusRsdQVPb"  # Radiohead
     sample_track = "spotify:track:6b2oQwSGFkzsMtQruIWm2p"
 
