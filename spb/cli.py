@@ -7,6 +7,9 @@ import time
 
 from . import auth, doctor, profile, recipes
 from .cache import Cache
+from .client import SpotifyError
+from .errors import SpbError
+from . import config
 from .client import Spotify
 
 
@@ -41,23 +44,34 @@ def _cache(args, playlists=None):
     return cache
 
 
+def _table(tracks):
+    """One consistent tracklist layout everywhere, sized to the content."""
+    if not tracks:
+        return
+    width_name = min(max(len(t["name"]) for t in tracks), 44)
+    width_artist = min(max(len(t["artist"]) for t in tracks), 30)
+    for track in tracks:
+        print(
+            "  %-*.*s  %-*.*s  %s"
+            % (width_name, width_name, track["name"],
+               width_artist, width_artist, track["artist"],
+               (track.get("released") or "")[:10])
+        )
+
+
 def _emit(tracks, args, client, default_name, description):
     if not tracks:
-        print("Nothing matched. Try widening the window or the genre list.")
+        print("Nothing matched. Try a wider window or a longer list.")
         return 0
 
     if args.limit:
         tracks = tracks[: args.limit]
 
-    for track in tracks:
-        print(
-            "%-38.38s  %-28.28s  %s"
-            % (track["name"], track["artist"], track.get("released", ""))
-        )
+    _table(tracks)
     print("\n%d track(s)." % len(tracks))
 
     if args.dry_run:
-        print("Dry run - nothing written to Spotify.")
+        print("Dry run - nothing written. Re-run without --dry-run to create it.")
         return 0
 
     name = args.name or default_name
@@ -65,7 +79,8 @@ def _emit(tracks, args, client, default_name, description):
         client.me()["id"], name, description, public=args.public
     )
     client.add_tracks(playlist["id"], [t["uri"] for t in tracks])
-    print("Created: " + playlist["external_urls"]["spotify"])
+    print("\nCreated \"%s\"\n  %s"
+          % (name, playlist["external_urls"]["spotify"]))
     return 0
 
 
@@ -75,16 +90,25 @@ def _sources(client, given, flag):
         return recipes.resolve_playlists(client, given)
     found = profile.auto_source_playlists(client.my_playlists())
     if not found:
-        raise SystemExit("No 'listened to' playlists found. Pass %s." % flag)
+        raise SpbError(
+            "No playlists matching 'listened to' were found, so there is "
+            "nothing to work from. Name them explicitly with %s, or run "
+            "'spb playlists' to see what you have." % flag
+        )
     print("Using: " + ", ".join(p["name"] for p in found) + "\n")
     return found
 
 
 def cmd_playlists(args):
     client = _connect()
-    for playlist in client.my_playlists():
-        print("%-40.40s %s  (%d tracks)"
-              % (playlist["name"], playlist["id"], playlist["tracks"]["total"]))
+    playlists = client.my_playlists()
+    width = min(max((len(p["name"]) for p in playlists), default=10), 44)
+    for playlist in playlists:
+        print("  %-*.*s  %5d tracks  %s"
+              % (width, width, playlist["name"],
+                 (playlist.get("tracks") or {}).get("total", 0),
+                 playlist["id"]))
+    print("\n%d playlist(s)." % len(playlists))
     return 0
 
 
@@ -169,6 +193,16 @@ def cmd_new_releases(args):
 
 def cmd_discover(args):
     client = _connect()
+    try:
+        client.artist_top_tracks("4Z8W4fKeB5YxbusRsdQVPb")
+    except SpotifyError:
+        raise SpbError(
+            "discover needs /artists/{id}/top-tracks, which Spotify closed to "
+            "Development mode apps in 2026.\n\n"
+            "Use build instead - ask Claude for an 'Artist - Title' list and:\n"
+            "    spb build --from picks.txt --exclude-known\n\n"
+            "Run 'spb doctor' to see everything your app can and cannot do."
+        )
     excluded = _sources(client, args.exclude, "--exclude")
     tracks, genres = recipes.discover(
         client,
@@ -187,6 +221,26 @@ def cmd_discover(args):
         % (args.top, args.artists, "/".join(genres), ", ".join(
             p["name"] for p in excluded)),
     )
+
+
+def cmd_login(args):
+    if args.client_id:
+        saved = config.set_client_id(args.client_id)
+        print("Saved client id %s to %s" % (saved, config.config_path()))
+    elif not config.get_client_id():
+        raise SpbError(
+            "Pass --client-id the first time:\n\n"
+            "    spb login --client-id YOUR_ID\n\n"
+            "Create a free app at https://developer.spotify.com/dashboard, "
+            "tick Web API, and add this redirect URI:\n\n"
+            "    " + auth.REDIRECT_URI
+        )
+
+    client = _connect()
+    me = client.me()
+    print("Logged in as %s." % (me.get("display_name") or me.get("id")))
+    print("Try:  spb doctor")
+    return 0
 
 
 def cmd_clear_cache(args):
@@ -294,6 +348,11 @@ def build_parser():
 
     subparsers.add_parser("playlists", help="list your playlists and their ids")
 
+    log = subparsers.add_parser(
+        "login", help="save your Spotify client id and authorize once"
+    )
+    log.add_argument("--client-id", help="from developer.spotify.com/dashboard")
+
     subparsers.add_parser(
         "clear-cache", help="delete the cached playlist and search data"
     )
@@ -394,6 +453,7 @@ def main(argv=None):
         "playlists": cmd_playlists,
         "new-releases": cmd_new_releases,
         "discover": cmd_discover,
+        "login": cmd_login,
         "clear-cache": cmd_clear_cache,
         "doctor": cmd_doctor,
         "export": cmd_export,
@@ -402,5 +462,17 @@ def main(argv=None):
     return handlers[args.command](args)
 
 
+def run():
+    """Entry point: report expected problems as messages, not tracebacks."""
+    try:
+        return main()
+    except SpbError as exc:
+        print("\n" + str(exc), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nStopped. Work done so far is cached.", file=sys.stderr)
+        return 130
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

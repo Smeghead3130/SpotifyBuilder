@@ -1,199 +1,129 @@
 # spb — Spotify playlist builder
 
-A small CLI that builds playlists from rules, using the Spotify Web API
-directly. Two recipes to start with:
+Build Spotify playlists from rules, or from a tracklist you worked out with
+Claude. Reads your library, filters against what you already own, writes a
+real playlist.
 
-- **new-releases** — everything released in the last N months by artists that
-  appear in playlists you name.
-- **discover** — artists you *don't* already have, in genres drawn from your
-  taste, represented by their top few tracks.
+## Quickstart
 
-## What a Development mode app can actually do
+```bash
+pip install -r requirements.txt
+spb login --client-id YOUR_CLIENT_ID     # once, ever
+spb doctor                                # what your app can do
+```
 
-Spotify's Feb/Mar 2026 changes withdrew most catalog access from apps in
-Development mode, which is what a self-registered app is. Measured against a
-real one with `spb doctor`:
+On Windows, use `.\spb.ps1` instead of `spb` — it finds Python for you:
+
+```powershell
+.\spb.ps1 login --client-id YOUR_CLIENT_ID
+.\spb.ps1 doctor
+```
+
+Getting a client id takes two minutes and is free:
+
+1. <https://developer.spotify.com/dashboard> → **Create app**
+2. Name it anything, tick **Web API**
+3. Redirect URI — paste exactly, then click **Add**:
+   `http://127.0.0.1:8731/callback`
+4. Copy the **Client ID** (ignore the secret; this uses PKCE)
+
+`spb login` opens a browser once. After that the token is cached at
+`~/.config/spb/` and refreshes itself.
+
+## The commands
+
+| Command | What it does |
+|---|---|
+| `spb playlists` | your playlists and their ids |
+| `spb doctor` | probe which Spotify endpoints your app can use |
+| `spb new-releases` | recent releases by artists you already have |
+| `spb build --from picks.txt` | make a playlist from an `Artist - Title` list |
+| `spb export` | dump your library as JSON, to hand to Claude |
+| `spb clear-cache` | throw away cached playlist and search data |
+
+Every command that writes takes `--dry-run` (show it, write nothing),
+`--name`, `--limit` and `--public`.
+
+Playlists are found by name, id, or URL via `--source` / `--exclude`. Given
+none, `spb` uses playlists whose names contain "listened to", newest first.
+
+### Recent releases by artists you have
+
+```bash
+spb new-releases --months 12 --per-artist 2 --dry-run
+```
+
+The first run over a large library takes several minutes — it is one search
+per artist — and shows progress with an ETA. Later runs are near-instant.
+
+### A playlist from a tracklist
+
+```bash
+spb build --from picks.txt --exclude-known --name "Claude picks"
+```
+
+`picks.txt` is one `Artist - Title` per line; `#` comments, numbered lists and
+en/em dashes are all fine. `--exclude-known` drops anything by an artist
+already in your playlists — which is how "artists I don't already have" is
+enforced, against your real library rather than a guess.
+
+### Working with Claude
+
+Claude cannot reach the Spotify API, so the split is: your machine talks to
+Spotify, Claude does the thinking.
+
+```bash
+spb export            # writes profile.json
+```
+
+Hand `profile.json` to Claude, ask for what you want, save the reply as
+`picks.txt`, then `spb build`. See `picks.txt` and `picks-recent.txt` in this
+repo for worked examples.
+
+## What a Development mode app can do
+
+Spotify's Feb/Mar 2026 changes withdrew most catalog access from
+self-registered apps. Measured with `spb doctor`:
 
 | Endpoint | State | Used by |
 |---|---|---|
 | `/me`, `/me/playlists` | works | everything |
 | `/playlists/{id}/items` (your own) | works | export, build |
-| `/search` (artist and track) | works | build, discover |
-| `/me/top/artists`, `/me/following` | works | genre inference, discover |
+| `/search` (artist and track) | works | build, new-releases |
+| `/me/top/artists`, `/me/following` | works | genre inference |
 | `/artists` (batch) | **blocked** | genre tags in export |
-| `/artists/{id}/albums` | **blocked** | new-releases (see below) |
+| `/artists/{id}/albums` | **blocked** | new-releases — rebuilt on search |
 | `/artists/{id}/top-tracks` | **blocked** | discover |
 
-So `export` and `build` — the chat workflow — work. `discover` can find
-artists but not their top tracks. `new-releases` no longer depends on the
-blocked discography endpoint: it asks the search endpoint for
-`artist:"NAME" year:2025-2026` once per artist instead, which is slower (one
-request each) but works in Development mode. `--via-discography` restores the
-old path for anyone with catalog access.
+So `export`, `build` and `new-releases` work. `discover` does not, and says so
+rather than failing obscurely.
 
-Two traps worth knowing. Reading a playlist you do not own returns 403 by
-design. And blocked catalog endpoints report a misleading 400 "Invalid limit"
-rather than a 403, so that error means "not allowed", not "bad parameter".
+Two traps: reading a playlist you do not own returns 403 by design, and
+blocked catalog endpoints report a misleading 400 "Invalid limit" rather than
+a 403 — that means "not allowed", not "bad parameter".
 
-Run `spb doctor` to measure your own app rather than trusting this table; a
-[Quota Extension](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
-moves an app out of Development mode and restores the catalog endpoints.
-
-## Why not the Spotify connector
-
-The Claude Spotify connector exposes three tools: a natural-language search
-capped at five results, a `create_playlist` that takes a *sentence* and lets
-Spotify's own engine choose the tracks, and "what's playing". It cannot read
-the contents of a playlist, so neither recipe above is expressible — the first
-needs the artist list out of a playlist, the second needs a set difference
-against one. The Web API has all of it, hence this.
-
-## Setup
-
-Spotify won't let a random program touch your account. You have to register
-the program with them once and get an ID for it. It's free, takes about two
-minutes, and you never have to do it again.
-
-1. Go to <https://developer.spotify.com/dashboard> and log in with your normal
-   Spotify account.
-2. Click **Create app**. Name and description can be anything ("spb" is fine).
-3. In the **Redirect URI** box, paste exactly:
-   `http://127.0.0.1:8731/callback` — then click **Add**.
-   *(This is the address on your own computer that Spotify sends you back to
-   after you approve. Nothing is published anywhere.)*
-4. Save. On the app's page, copy the **Client ID** — a long string of letters
-   and numbers. There is also a Client Secret; you do not need it.
-5. In a terminal:
-
-   ```bash
-   pip install -r requirements.txt
-   export SPOTIFY_CLIENT_ID=paste_the_client_id_here
-   ```
-
-The first command you run pops open a browser asking you to approve access to
-your own account. Approve it once. After that a login token is saved to
-`~/.config/spb/token.json` (readable only by you) and renewed automatically,
-so you never see that screen again.
-
-## Usage
-
-```bash
-python -m spb.cli playlists          # names + ids of everything you own
-```
-
-### Recipe 1 — new releases from artists in a playlist
-
-> *"New released albums of artists I have added to this playlist, released in
-> the last 12 months."*
-
-```bash
-python -m spb.cli new-releases --source "2026 - Music I Listened To" --months 12
-```
-
-Seed playlists are given by name, id, or `open.spotify.com` URL, and `--source`
-repeats. Useful flags:
-
-| Flag | Effect |
-|---|---|
-| `--months N` | release window, default 12 |
-| `--per-album N` | take only the first N tracks of each album |
-| `--include-reissues` | keep remasters, deluxe and anniversary editions (dropped by default) |
-| `--dry-run` | print the tracks, write nothing |
-| `--limit N` | cap the final playlist |
-| `--name` / `--public` | name it yourself / make it public |
-
-Filtering notes: albums where the seed artist is only a *featured* credit on a
-compilation are dropped. Spotify's `release_date` comes at year, month, or day
-precision; the coarse ones anchor to the start of the period, so a `2026`-only
-album counts as 2026-01-01.
-
-### Recipe 2 — artists you don't have yet
-
-> *"Artists that are not in my playlists as defined by X, within genres I may
-> like — play their top few songs."*
-
-```bash
-python -m spb.cli discover --exclude "2026 - Music I Listened To" \
-                           --exclude Discovery \
-                           --artists 15 --top 3
-```
-
-Everything appearing in the `--exclude` playlists, plus every artist you
-follow, is removed from the candidate pool. Genres are inferred from your top
-artists and the seed playlists unless you pass `--genre` (repeatable):
-
-```bash
-python -m spb.cli discover --exclude Discovery --genre shoegaze --genre "dream pop"
-```
-
-**A real constraint:** Spotify closed `/recommendations` and
-`/artists/{id}/related-artists` to new apps in November 2024. "Genres you may
-like" therefore works by ranking the genre tags on your top artists and then
-mining `search?q=genre:"..."`, ordered by artist popularity. It's a coarser
-instrument than the old recommender — expect to steer it with `--genre`.
-
-## Using it through a chat with Claude
-
-Claude has no network route to the Spotify API — the connector can't read
-playlists, and a sandboxed session is firewalled off from `api.spotify.com`
-outright. So the pattern is: **your machine talks to Spotify, Claude does the
-thinking in between.**
-
-```bash
-python -m spb.cli export
-```
-
-That finds your "Music I Listened To <year>" playlists automatically, and
-writes `profile.json` — every artist in them, each artist's genre tags, the
-ranked genre counts, your followed artists, and your top artists over three
-time windows. No listening data leaves your machine unless you send the file.
-
-Hand that file to Claude and ask for whatever you actually want:
-
-> *"Here's my profile. Find me artists in the genres I lean on that I haven't
-> heard, skew toward the last few years, nothing too mainstream — give me 30
-> tracks."*
-
-Claude answers with a plain list:
-
-```
-Duster - Constellations
-Hovvdy - Runner
-...
-```
-
-Save it as `picks.txt` and push it to Spotify:
-
-```bash
-python -m spb.cli build --from picks.txt --name "Claude picks"
-```
-
-`build` looks each line up on Spotify, tells you which ones it couldn't find,
-and creates the playlist. `Artist - Title` per line; en/em dashes, slashes,
-numbered lists and `#` comments are all tolerated.
-
-The two rule-based recipes above stay useful for the things that are pure
-bookkeeping — "what came out this year by people I already listen to" needs
-no taste, just an API. Use the chat loop for the judgement calls.
+A [Quota Extension](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+moves an app out of Development mode and restores the blocked endpoints.
 
 ## Caching
 
-Reading eight years of playlists on every run is wasteful, so results are
-cached at `~/.config/spb/cache.json`.
+Playlist contents are cached under Spotify's `snapshot_id`, which changes
+whenever a playlist is edited — so a hit is exact and never expires. Finished
+year playlists are read once ever; the year you are still adding to re-reads
+itself only when it actually changes, and nothing else does.
 
-Playlist contents are keyed by Spotify's `snapshot_id`, which changes whenever
-a playlist is edited. That makes a cache hit **exact** rather than a guess, so
-those entries never expire: finished year playlists are read once ever, while
-the year still being added to re-reads itself the moment it changes — and only
-that one.
+Searches have no such marker, so they expire after 7 days
+(`--search-ttl HOURS`). `--no-cache` skips the cache for one run;
+`spb clear-cache` discards it.
 
-Search results have no equivalent marker, since new music appears constantly,
-so they expire after 7 days (`--search-ttl HOURS` to change it).
+## Files it writes
 
-```bash
-python -m spb.cli new-releases --no-cache     # ignore it for one run
-python -m spb.cli clear-cache                 # throw it away
-```
+| Path | What |
+|---|---|
+| `~/.config/spb/config.json` | your client id |
+| `~/.config/spb/token.json` | the login token, mode 0600 |
+| `~/.config/spb/cache.json` | cached playlists and searches |
+| `./profile.json` | only when you run `export` |
 
 ## Tests
 
@@ -201,13 +131,7 @@ python -m spb.cli clear-cache                 # throw it away
 python -m pytest tests -q
 ```
 
-Fifteen tests covering date precision, the month window across year
-boundaries, reissue and uncredited-compilation filtering, the exclusion set,
-playlist resolution, "listened to" auto-detection, and tracklist parsing —
-all against a fake client, so no credentials are needed.
-
-Worth being straight about: the tests exercise the *logic*, using a stand-in
-for Spotify. Nothing in `auth.py` or `client.py` has run against the real
-Spotify API yet, because the machine this was written on can't reach it. The
-filtering and parsing are verified; the network and login paths are not.
-Expect a rough edge on first run and send the error text.
+65 tests, all against fakes, so no credentials or network are needed. They
+cover the date window, reissue and wrong-artist filtering, the exclusion set,
+snapshot-keyed caching, the OAuth callback listener, cp1252 encoding, and the
+CLI's own error handling.

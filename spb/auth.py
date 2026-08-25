@@ -18,6 +18,9 @@ import webbrowser
 
 import requests
 
+from . import config
+from .errors import SpbError
+
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 REDIRECT_URI = "http://127.0.0.1:8731/callback"
@@ -87,7 +90,7 @@ def _listen_once(timeout=180):
     try:
         server = http.server.HTTPServer(("127.0.0.1", 8731), _CallbackHandler)
     except OSError as exc:
-        raise RuntimeError(
+        raise SpbError(
             "Could not listen on 127.0.0.1:8731 (%s). Something else is using "
             "that port - close it and try again." % exc
         )
@@ -126,15 +129,15 @@ def _authorize(client_id):
 
     returned = _listen_once()
     if "error" in returned:
-        raise RuntimeError("Spotify denied authorization: " + returned["error"][0])
+        raise SpbError("Spotify denied authorization: " + returned["error"][0])
     if returned.get("state", [None])[0] != state:
-        raise RuntimeError(
+        raise SpbError(
             "state mismatch on the Spotify redirect - the browser sent back a "
             "different login attempt than the one just started. Close any "
             "stale Spotify authorization tabs and run the command again."
         )
     if not returned.get("code"):
-        raise RuntimeError("Spotify redirect carried no authorization code")
+        raise SpbError("Spotify redirect carried no authorization code")
 
     response = requests.post(
         TOKEN_URL,
@@ -170,11 +173,14 @@ def _refresh(client_id, refresh_token):
 
 def get_access_token(client_id=None):
     """Return a usable access token, authorizing or refreshing as needed."""
-    client_id = client_id or os.environ.get("SPOTIFY_CLIENT_ID")
+    client_id = client_id or config.get_client_id()
     if not client_id:
-        raise RuntimeError(
-            "Set SPOTIFY_CLIENT_ID (from https://developer.spotify.com/dashboard) "
-            "and add " + REDIRECT_URI + " as a redirect URI on that app."
+        raise SpbError(
+            "No Spotify client id saved yet. Run:\n\n"
+            "    spb login --client-id YOUR_ID\n\n"
+            "Get one free at https://developer.spotify.com/dashboard - create "
+            "an app, tick Web API, and add this exact redirect URI:\n\n"
+            "    " + REDIRECT_URI
         )
 
     tokens = _load()

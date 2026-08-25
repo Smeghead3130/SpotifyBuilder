@@ -1,0 +1,16 @@
+[project]
+name = "spb"
+version = "0.2.0"
+description = "Rule-driven Spotify playlist builder"
+requires-python = ">=3.8"
+dependencies = ["requests>=2.31"]
+
+[project.scripts]
+spb = "spb.cli:run"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["spb"]

@@ -6,6 +6,8 @@ import unicodedata
 
 import requests
 
+from .errors import SpbError
+
 API = "https://api.spotify.com/v1"
 
 
@@ -24,7 +26,7 @@ def _same_artist(a, b):
     return left == right or left.startswith(right) or right.startswith(left)
 
 
-class SpotifyError(RuntimeError):
+class SpotifyError(SpbError):
     pass
 
 
