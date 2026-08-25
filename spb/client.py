@@ -32,10 +32,23 @@ class Spotify:
             if response.status_code == 204 or not response.content:
                 return {}
             if not response.ok:
-                raise SpotifyError(
-                    "%s %s -> %s %s"
-                    % (method, url, response.status_code, response.text[:400])
+                message = "%s %s -> %s %s" % (
+                    method, url, response.status_code, response.text[:400],
                 )
+                if response.status_code == 403:
+                    message += (
+                        "\n\nA 403 here usually means the app is in Development "
+                        "mode and Spotify is refusing this endpoint, or the "
+                        "playlist is not yours. Check the app at "
+                        "https://developer.spotify.com/dashboard."
+                    )
+                if response.status_code == 401:
+                    message += (
+                        "\n\nA 401 means the saved login has expired or lacks a "
+                        "scope. Delete ~/.config/spb/token.json and run again to "
+                        "re-authorize."
+                    )
+                raise SpotifyError(message)
             return response.json()
         raise SpotifyError("gave up after repeated rate limiting on " + url)
 
@@ -72,19 +85,32 @@ class Spotify:
         return list(self.paginate("/me/playlists"))
 
     def playlist_tracks(self, playlist_id):
-        """Full track objects for a playlist, skipping local files and podcasts."""
-        fields = (
-            "next,items(track(id,name,artists(id,name),"
-            "album(id,name,release_date)))"
-        )
+        """Full track objects for a playlist, skipping local files and podcasts.
+
+        The 9 March 2026 API migration replaced /playlists/{id}/tracks with
+        /playlists/{id}/items and renamed the per-entry "track" key to "item".
+        The old path now 403s for Development Mode apps. Try the new one and
+        fall back, so this keeps working either side of the migration.
+        """
         out = []
-        for item in self.paginate(
-            "/playlists/%s/tracks" % playlist_id, limit=100, fields=fields
-        ):
-            track = item.get("track") or {}
+        for entry in self._playlist_entries(playlist_id):
+            # "item" post-migration, "track" before it.
+            track = entry.get("item") or entry.get("track") or {}
             if track.get("id"):
                 out.append(track)
         return out
+
+    def _playlist_entries(self, playlist_id):
+        try:
+            return list(
+                self.paginate("/playlists/%s/items" % playlist_id, limit=100)
+            )
+        except SpotifyError as exc:
+            if " 404 " not in str(exc):
+                raise
+            return list(
+                self.paginate("/playlists/%s/tracks" % playlist_id, limit=100)
+            )
 
     def artists(self, artist_ids):
         """Hydrate artist objects (for genres/popularity) in batches of 50."""
@@ -145,11 +171,15 @@ class Spotify:
         )
 
     def add_tracks(self, playlist_id, uris):
+        """Add tracks in batches of 100, via the post-migration /items path."""
         for start in range(0, len(uris), 100):
-            self.post(
-                "/playlists/%s/tracks" % playlist_id,
-                {"uris": uris[start : start + 100]},
-            )
+            batch = {"uris": uris[start : start + 100]}
+            try:
+                self.post("/playlists/%s/items" % playlist_id, batch)
+            except SpotifyError as exc:
+                if " 404 " not in str(exc):
+                    raise
+                self.post("/playlists/%s/tracks" % playlist_id, batch)
 
     def find_track(self, artist, title, market="from_token"):
         """Resolve an 'artist / title' pair to a track URI. None if no match."""
