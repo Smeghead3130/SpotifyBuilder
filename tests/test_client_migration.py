@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from spb.client import Spotify  # noqa: E402
+from spb.client import Spotify, SpotifyError  # noqa: E402
 
 
 class FakeResponse:
@@ -89,3 +89,48 @@ def test_add_tracks_posts_to_items():
     client = Spotify("tok", session=session)
     client.add_tracks("p1", ["spotify:track:1"])
     assert session.paths[-1] == ("POST", "https://api.spotify.com/v1/playlists/p1/items")
+
+
+class CreateSession(FakeSession):
+    """POST /me/playlists behaves per `me_status`; the legacy path succeeds."""
+
+    def __init__(self, me_status):
+        super().__init__("new")
+        self.me_status = me_status
+
+    def request(self, method, url, **kwargs):
+        self.paths.append((method, url))
+        if method == "POST" and url.endswith("/me/playlists"):
+            if self.me_status == 200:
+                return FakeResponse(200, {"id": "new1"})
+            return FakeResponse(self.me_status, {"error": {"status": self.me_status}})
+        if method == "POST" and url.endswith("/users/u1/playlists"):
+            return FakeResponse(200, {"id": "legacy1"})
+        return FakeResponse(200, {})
+
+
+def test_create_playlist_uses_the_me_path():
+    session = CreateSession(200)
+    client = Spotify("tok", session=session)
+    assert client.create_playlist("u1", "Mix")["id"] == "new1"
+    assert session.paths[0][1].endswith("/me/playlists")
+
+
+def test_create_playlist_falls_back_on_404():
+    session = CreateSession(404)
+    client = Spotify("tok", session=session)
+    assert client.create_playlist("u1", "Mix")["id"] == "legacy1"
+    assert [p[1].rsplit("/v1", 1)[-1] for p in session.paths] == [
+        "/me/playlists",
+        "/users/u1/playlists",
+    ]
+
+
+def test_a_403_on_create_is_not_retried_against_the_legacy_path():
+    import pytest
+
+    session = CreateSession(403)
+    client = Spotify("tok", session=session)
+    with pytest.raises(SpotifyError):
+        client.create_playlist("u1", "Mix")
+    assert len(session.paths) == 1

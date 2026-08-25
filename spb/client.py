@@ -170,10 +170,19 @@ class Spotify:
         return (page.get("artists") or {}).get("items") or []
 
     def create_playlist(self, user_id, name, description="", public=False):
-        return self.post(
-            "/users/%s/playlists" % user_id,
-            {"name": name, "description": description, "public": public},
-        )
+        """Create a playlist for the current user.
+
+        The 2026 migration moved creation to /me/playlists; the old
+        /users/{id}/playlists path 403s for Development mode apps.
+        """
+        body = {"name": name, "description": description, "public": public}
+        try:
+            return self.post("/me/playlists", body)
+        except SpotifyError as exc:
+            first = str(exc).splitlines()[0]
+            if " 404 " not in first and " 405 " not in first:
+                raise
+            return self.post("/users/%s/playlists" % user_id, body)
 
     def add_tracks(self, playlist_id, uris):
         """Add tracks in batches of 100, via the post-migration /items path."""

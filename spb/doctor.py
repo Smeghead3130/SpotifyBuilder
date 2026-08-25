@@ -7,6 +7,8 @@ whole question in one run.
 
 from .client import SpotifyError
 
+SAMPLE_TRACK = "spotify:track:6b2oQwSGFkzsMtQruIWm2p"
+
 # (label, callable, what breaks without it)
 
 
@@ -72,7 +74,7 @@ def run(client, create_probe=False):
         print("Note: none of your playlists appear to be owned by you; the "
               "playlist probe may report a false 403.")
     sample_artist = "4Z8W4fKeB5YxbusRsdQVPb"  # Radiohead
-    sample_track = "spotify:track:6b2oQwSGFkzsMtQruIWm2p"
+    sample_track = SAMPLE_TRACK
 
     rows = []
     ok = set()
@@ -100,21 +102,43 @@ def run(client, create_probe=False):
             ok.add(label)
 
     if create_probe:
-        label = "POST playlist + add items"
-        try:
-            created = client.create_playlist(
-                me["id"], "spb connectivity probe", "Safe to delete.", public=False
-            )
-            client.add_tracks(created["id"], [sample_track])
-            rows.append(
-                (label, "OK",
-                 "created %s - delete it in Spotify" % created["id"], "build")
-            )
-            ok.add(label)
-        except SpotifyError as exc:
-            rows.append((label, "403", str(exc).splitlines()[0][-90:], "build"))
+        _write_probes(client, me, mine, rows, ok)
 
     return rows, ok
+
+
+def _write_probes(client, me, mine, rows, ok, sample_track=SAMPLE_TRACK):
+    """Creating a playlist and adding to one are separate permissions."""
+    created = None
+    label = "POST /me/playlists (create)"
+    try:
+        created = client.create_playlist(
+            me["id"], "spb connectivity probe", "Safe to delete.", public=False
+        )
+    except SpotifyError as exc:
+        rows.append((label, "403", str(exc).splitlines()[0][-90:], "build"))
+    else:
+        rows.append(
+            (label, "OK",
+             "created %s - delete it in Spotify" % created["id"], "build")
+        )
+        ok.add(label)
+
+    label = "POST /playlists/{id}/items (add)"
+    target = created["id"] if created else (mine[0]["id"] if mine else None)
+    if not target:
+        rows.append((label, "ERR", "no playlist of your own to add to", "build"))
+        return
+    try:
+        client.add_tracks(target, [sample_track])
+    except SpotifyError as exc:
+        rows.append((label, "403", str(exc).splitlines()[0][-90:], "build"))
+    else:
+        where = "the probe playlist" if created else mine[0]["name"]
+        rows.append(
+            (label, "OK", "added one track to %s - remove it" % where, "build")
+        )
+        ok.add(label)
 
 
 def report(rows, ok):
