@@ -221,7 +221,7 @@ def _dedupe(tracks):
 
 def releases_by_search(client, playlists, months=12, per_artist=3,
                        skip_reissues=True, progress=None, today=None,
-                       cache=None, search_ttl=None):
+                       cache=None, search_ttl=None, checkpoint_every=50):
     """New releases by artists you already have, found via track search.
 
     The discography endpoint (/artists/{id}/albums) is closed to Development
@@ -257,37 +257,48 @@ def releases_by_search(client, playlists, months=12, per_artist=3,
                 continue
             if cache is not None:
                 cache.set(key, tracks)
+                # Save as we go: an interrupted run must not throw away
+                # hundreds of searches already paid for.
+                if checkpoint_every and index % checkpoint_every == 0:
+                    cache.save()
 
-        seen_albums = set()
-        taken = 0
-        for track in tracks:
-            if taken >= per_artist:
-                break
-            album = track.get("album") or {}
-            released = parse_release_date(album.get("release_date"))
-            if not released or released < cutoff:
-                continue
-            if skip_reissues and _REISSUE.search(album.get("name", "")):
-                continue
-            credited = [a.get("name", "") for a in track.get("artists") or []]
-            if not any(_fold_name(c) == _fold_name(name) for c in credited):
-                continue
-            if album.get("id") in seen_albums:
-                continue
-            seen_albums.add(album.get("id"))
-            taken += 1
-            picked.append(
-                {
-                    "uri": track["uri"],
-                    "name": track["name"],
-                    "artist": name,
-                    "album": album.get("name", ""),
-                    "released": album.get("release_date", ""),
-                }
-            )
+        picked.extend(
+            _pick_recent(tracks, name, cutoff, per_artist, skip_reissues)
+        )
 
     picked.sort(key=lambda t: t["released"] or "", reverse=True)
     return _dedupe(picked)
+
+
+def _pick_recent(tracks, name, cutoff, per_artist, skip_reissues):
+    """The in-window tracks credited to `name`, one per album, newest first."""
+    out = []
+    seen_albums = set()
+    for track in tracks:
+        if len(out) >= per_artist:
+            break
+        album = track.get("album") or {}
+        released = parse_release_date(album.get("release_date"))
+        if not released or released < cutoff:
+            continue
+        if skip_reissues and _REISSUE.search(album.get("name", "")):
+            continue
+        credited = [a.get("name", "") for a in track.get("artists") or []]
+        if not any(_fold_name(c) == _fold_name(name) for c in credited):
+            continue
+        if album.get("id") in seen_albums:
+            continue
+        seen_albums.add(album.get("id"))
+        out.append(
+            {
+                "uri": track["uri"],
+                "name": track["name"],
+                "artist": name,
+                "album": album.get("name", ""),
+                "released": album.get("release_date", ""),
+            }
+        )
+    return out
 
 
 def _fold_name(name):

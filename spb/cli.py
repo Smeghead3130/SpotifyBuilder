@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import sys
+import time
 
 from . import auth, doctor, profile, recipes
 from .cache import Cache
@@ -23,8 +24,8 @@ def _use_utf8_output():
             pass
 
 
-def _connect():
-    return Spotify(auth.get_access_token())
+def _connect(on_rate_limit=None):
+    return Spotify(auth.get_access_token(), on_rate_limit=on_rate_limit)
 
 
 def _cache(args, playlists=None):
@@ -87,17 +88,50 @@ def cmd_playlists(args):
     return 0
 
 
-def _progress(done, total, name):
-    # One search per artist over a large library takes minutes; say so.
-    if done == 1 or done % 25 == 0 or done == total:
-        sys.stdout.write("\r  %d/%d artists  %-30.30s" % (done, total, name))
+class _Progress:
+    """A live progress line with an ETA, plus visible rate-limit waits.
+
+    One search per artist over a large library is minutes of work, and a
+    silent Retry-After sleep is indistinguishable from a hang.
+    """
+
+    def __init__(self):
+        self.started = time.time()
+        self.waited = 0.0
+
+    def _line(self, text):
+        sys.stdout.write("\r\033[K" + text)
         sys.stdout.flush()
-    if done == total:
-        sys.stdout.write("\n\n")
+
+    def rate_limited(self, seconds):
+        self.waited += seconds
+        self._line("  rate limited by Spotify, waiting %ds..." % round(seconds))
+
+    def __call__(self, done, total, name):
+        elapsed = time.time() - self.started
+        rate = done / elapsed if elapsed > 0 else 0
+        eta = (total - done) / rate if rate > 0 else 0
+        note = "  (%ds waiting on rate limits)" % round(self.waited) \
+            if self.waited >= 1 else ""
+        self._line(
+            "  %d/%d artists  %s left%s  %-24.24s"
+            % (done, total, _mmss(eta), note, name)
+        )
+        if done == total:
+            sys.stdout.write(
+                "\r\033[K  %d artists searched in %s%s\n\n"
+                % (total, _mmss(elapsed), note)
+            )
+
+
+def _mmss(seconds):
+    seconds = int(max(seconds, 0))
+    return "%d:%02d" % (seconds // 60, seconds % 60)
 
 
 def cmd_new_releases(args):
-    client = _connect()
+    progress = None if args.quiet else _Progress()
+    client = _connect(on_rate_limit=progress.rate_limited if progress else None)
     seeds = _sources(client, args.source, "--source")
     if args.via_discography:
         tracks = recipes.new_releases(
@@ -115,7 +149,7 @@ def cmd_new_releases(args):
             months=args.months,
             per_artist=args.per_artist,
             skip_reissues=not args.include_reissues,
-            progress=None if args.quiet else _progress,
+            progress=progress,
             cache=cache,
             search_ttl=args.search_ttl * 3600 if args.search_ttl else None,
         )

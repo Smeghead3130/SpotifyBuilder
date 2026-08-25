@@ -29,9 +29,11 @@ class SpotifyError(RuntimeError):
 
 
 class Spotify:
-    def __init__(self, access_token, session=None):
+    def __init__(self, access_token, session=None, on_rate_limit=None):
         self.session = session or requests.Session()
         self.session.headers["Authorization"] = "Bearer " + access_token
+        self.on_rate_limit = on_rate_limit
+        self.rate_limited_for = 0.0
 
     # ---- transport -------------------------------------------------
 
@@ -40,8 +42,13 @@ class Spotify:
         for attempt in range(6):
             response = self.session.request(method, url, timeout=30, **kwargs)
             if response.status_code == 429:
-                # Retry-After is in seconds and Spotify means it.
-                time.sleep(float(response.headers.get("Retry-After", 2)) + 0.5)
+                # Retry-After is in seconds and Spotify means it. A long wait
+                # is indistinguishable from a hang unless it is announced.
+                wait = float(response.headers.get("Retry-After", 2)) + 0.5
+                self.rate_limited_for += wait
+                if self.on_rate_limit:
+                    self.on_rate_limit(wait)
+                time.sleep(wait)
                 continue
             if response.status_code >= 500 and attempt < 5:
                 time.sleep(2**attempt)
