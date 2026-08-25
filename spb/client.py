@@ -1,10 +1,27 @@
 """Thin Spotify Web API client: pagination, rate-limit backoff, batching."""
 
+import re
 import time
+import unicodedata
 
 import requests
 
 API = "https://api.spotify.com/v1"
+
+
+def _same_artist(a, b):
+    """Compare artist names ignoring case, accents and punctuation."""
+    def fold(name):
+        folded = unicodedata.normalize("NFKD", name or "")
+        folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+        return re.sub(r"[^a-z0-9]+", "", folded.casefold())
+
+    left, right = fold(a), fold(b)
+    if not left or not right:
+        return False
+    # One may carry a suffix the other lacks, e.g. "Waxahatchee" against
+    # "Waxahatchee, MJ Lenderman" once Spotify splits the credit.
+    return left == right or left.startswith(right) or right.startswith(left)
 
 
 class SpotifyError(RuntimeError):
@@ -201,11 +218,18 @@ class Spotify:
                                             artist.replace('"', ""))
         page = self.get("/search", q=query, type="track", limit=5)
         items = (page.get("tracks") or {}).get("items") or []
-        if not items:
-            # Fall back to a loose query; quoted field search misses remixes,
-            # featured credits and punctuation differences.
-            page = self.get(
-                "/search", q="%s %s" % (artist, title), type="track", limit=5,
-            )
-            items = (page.get("tracks") or {}).get("items") or []
-        return items[0] if items else None
+        if items:
+            return items[0]
+
+        # Fall back to a loose query; the quoted field search misses remixes,
+        # featured credits and punctuation differences. But a loose search
+        # will happily return something by a completely different artist, so
+        # only accept a result that actually credits the artist asked for.
+        page = self.get(
+            "/search", q="%s %s" % (artist, title), type="track", limit=5,
+        )
+        for track in (page.get("tracks") or {}).get("items") or []:
+            credited = [a.get("name", "") for a in track.get("artists") or []]
+            if any(_same_artist(name, artist) for name in credited):
+                return track
+        return None
