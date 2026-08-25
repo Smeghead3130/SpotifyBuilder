@@ -13,11 +13,18 @@ from spb import auth  # noqa: E402
 
 
 def _hit(path):
+    """Returns the status code, or None if the listener already closed.
+
+    Requests made after the real redirect race the server shutdown, so a
+    refused connection there is expected rather than a failure.
+    """
     try:
         urllib.request.urlopen("http://127.0.0.1:8731" + path, timeout=3).read()
         return 200
     except urllib.error.HTTPError as exc:
         return exc.code
+    except (urllib.error.URLError, OSError):
+        return None
 
 
 def _listen_in_background(box, timeout=15):
