@@ -51,7 +51,19 @@ def build_profile(client, playlists):
             }
         )
 
-    hydrated = client.artists(list(seen_artists))
+    # Batch /artists was withdrawn from Development Mode apps in the
+    # Feb/Mar 2026 API changes, and it is the only source of genre tags.
+    # Without it the profile is still useful - names carry a lot.
+    notes = []
+    try:
+        hydrated = client.artists(list(seen_artists))
+    except Exception as exc:
+        notes.append("artist genres unavailable: %s" % _short(exc))
+        hydrated = [
+            {"id": aid, "name": name, "genres": []}
+            for aid, name in sorted(seen_artists.items(), key=lambda kv: kv[1])
+        ]
+
     genre_counts = {}
     artist_rows = []
     for artist in hydrated:
@@ -77,17 +89,23 @@ def build_profile(client, playlists):
                 }
             )
         except Exception as exc:  # a missing scope should not sink the export
-            top.append({"range": window, "error": str(exc)})
+            top.append({"range": window, "error": _short(exc)})
+            notes.append("top artists (%s) unavailable" % window)
+
+    try:
+        followed = sorted(a.get("name", "") for a in client.followed_artists())
+    except Exception as exc:
+        followed = []
+        notes.append("followed artists unavailable: %s" % _short(exc))
 
     return {
+        "notes": notes,
         "playlists": playlist_blocks,
         "artists": sorted(artist_rows, key=lambda a: a["name"].lower()),
         "genre_counts": dict(
             sorted(genre_counts.items(), key=lambda kv: -kv[1])
         ),
-        "followed": sorted(
-            a.get("name", "") for a in client.followed_artists()
-        ),
+        "followed": followed,
         "top_artists": top,
     }
 
@@ -130,6 +148,11 @@ def resolve_picks(client, pairs):
         else:
             missing.append("%s - %s" % (artist, title))
     return found, missing
+
+
+def _short(exc):
+    """First line of an exception, so notes stay readable."""
+    return str(exc).splitlines()[0][:200]
 
 
 def write_profile(profile, path):

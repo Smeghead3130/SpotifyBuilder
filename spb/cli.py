@@ -4,7 +4,7 @@ import argparse
 import datetime
 import sys
 
-from . import auth, profile, recipes
+from . import auth, doctor, profile, recipes
 from .client import Spotify
 
 
@@ -102,6 +102,13 @@ def cmd_discover(args):
     )
 
 
+def cmd_doctor(args):
+    client = _connect()
+    rows, ok = doctor.run(client, create_probe=args.write_test)
+    doctor.report(rows, ok)
+    return 0
+
+
 def cmd_export(args):
     client = _connect()
     if args.source:
@@ -171,6 +178,14 @@ def build_parser():
 
     subparsers.add_parser("playlists", help="list your playlists and their ids")
 
+    doc = subparsers.add_parser(
+        "doctor", help="probe which Spotify endpoints this app can still use"
+    )
+    doc.add_argument(
+        "--write-test", action="store_true",
+        help="also create a throwaway playlist to test write access",
+    )
+
     new = subparsers.add_parser(
         "new-releases", parents=[shared], help="recent releases by artists you have"
     )
@@ -229,6 +244,7 @@ def main(argv=None):
         "playlists": cmd_playlists,
         "new-releases": cmd_new_releases,
         "discover": cmd_discover,
+        "doctor": cmd_doctor,
         "export": cmd_export,
         "build": cmd_build,
     }
