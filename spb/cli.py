@@ -167,7 +167,7 @@ def cmd_build(args):
 
     if args.exclude_known:
         seeds = _sources(client, args.exclude, "--exclude")
-        known = profile.artists_in_playlists(client, seeds)
+        known = recipes.artists_in_playlists(client, seeds)
         found, dropped = profile.drop_known_artists(found, known.values())
         if dropped:
             print("Dropped %d pick(s) by artists already in your playlists:"
