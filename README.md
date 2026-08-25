@@ -8,6 +8,33 @@ directly. Two recipes to start with:
 - **discover** — artists you *don't* already have, in genres drawn from your
   taste, represented by their top few tracks.
 
+## What a Development mode app can actually do
+
+Spotify's Feb/Mar 2026 changes withdrew most catalog access from apps in
+Development mode, which is what a self-registered app is. Measured against a
+real one with `spb doctor`:
+
+| Endpoint | State | Used by |
+|---|---|---|
+| `/me`, `/me/playlists` | works | everything |
+| `/playlists/{id}/items` (your own) | works | export, build |
+| `/search` (artist and track) | works | build, discover |
+| `/me/top/artists`, `/me/following` | works | genre inference, discover |
+| `/artists` (batch) | **blocked** | genre tags in export |
+| `/artists/{id}/albums` | **blocked** | new-releases |
+| `/artists/{id}/top-tracks` | **blocked** | discover |
+
+So `export` and `build` — the chat workflow — work. `new-releases` does not,
+and `discover` can find artists but not their top tracks.
+
+Two traps worth knowing. Reading a playlist you do not own returns 403 by
+design. And blocked catalog endpoints report a misleading 400 "Invalid limit"
+rather than a 403, so that error means "not allowed", not "bad parameter".
+
+Run `spb doctor` to measure your own app rather than trusting this table; a
+[Quota Extension](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+moves an app out of Development mode and restores the catalog endpoints.
+
 ## Why not the Spotify connector
 
 The Claude Spotify connector exposes three tools: a natural-language search

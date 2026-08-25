@@ -86,7 +86,13 @@ def run(client, create_probe=False):
             code = "403" if " 403 " in first else (
                 "404" if " 404 " in first else "ERR"
             )
-            rows.append((label, code, first[-90:], breaks))
+            detail = first[-90:]
+            # Catalog endpoints closed to Development mode report a bogus
+            # 400 "Invalid limit" instead of a 403.
+            if "Invalid limit" in first:
+                code = "403"
+                detail = "no catalog access (reported as 400 'Invalid limit')"
+            rows.append((label, code, detail, breaks))
         except Exception as exc:
             rows.append((label, "ERR", str(exc)[:90], breaks))
         else:

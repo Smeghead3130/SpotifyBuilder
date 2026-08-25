@@ -121,8 +121,9 @@ class Spotify:
             out.extend(self.get("/artists", ids=",".join(chunk)).get("artists") or [])
         return out
 
-    # The albums endpoint began rejecting limit=50 with "Invalid limit" after
-    # the 2026 changes; 20 is accepted.
+    # Development mode apps have no catalog access to this endpoint since the
+    # 2026 changes. It reports that as 400 "Invalid limit" rather than 403,
+    # which is misleading - no page size makes it work.
     ALBUM_PAGE = 20
 
     def artist_albums(self, artist_id, groups="album,single"):
