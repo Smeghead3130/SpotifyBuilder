@@ -21,11 +21,15 @@ real one with `spb doctor`:
 | `/search` (artist and track) | works | build, discover |
 | `/me/top/artists`, `/me/following` | works | genre inference, discover |
 | `/artists` (batch) | **blocked** | genre tags in export |
-| `/artists/{id}/albums` | **blocked** | new-releases |
+| `/artists/{id}/albums` | **blocked** | new-releases (see below) |
 | `/artists/{id}/top-tracks` | **blocked** | discover |
 
-So `export` and `build` — the chat workflow — work. `new-releases` does not,
-and `discover` can find artists but not their top tracks.
+So `export` and `build` — the chat workflow — work. `discover` can find
+artists but not their top tracks. `new-releases` no longer depends on the
+blocked discography endpoint: it asks the search endpoint for
+`artist:"NAME" year:2025-2026` once per artist instead, which is slower (one
+request each) but works in Development mode. `--via-discography` restores the
+old path for anyone with catalog access.
 
 Two traps worth knowing. Reading a playlist you do not own returns 403 by
 design. And blocked catalog endpoints report a misleading 400 "Invalid limit"

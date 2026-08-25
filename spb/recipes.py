@@ -2,6 +2,7 @@
 
 import datetime
 import re
+import unicodedata
 
 # Spotify release_date has three precisions: "2026", "2026-03", "2026-03-14".
 _DATE_FORMATS = {4: "%Y", 7: "%Y-%m", 10: "%Y-%m-%d"}
@@ -191,3 +192,70 @@ def _dedupe(tracks):
         seen.add(track["uri"])
         out.append(track)
     return out
+
+
+def releases_by_search(client, playlists, months=12, per_artist=3,
+                       skip_reissues=True, progress=None, today=None):
+    """New releases by artists you already have, found via track search.
+
+    The discography endpoint (/artists/{id}/albums) is closed to Development
+    mode apps, so this asks the search endpoint - which is not - for recent
+    tracks credited to each artist, one query per artist.
+    """
+    today = today or datetime.date.today()
+    cutoff = months_ago(months, today)
+    years = sorted({cutoff.year, today.year})
+    span = str(years[0]) if len(years) == 1 else "%d-%d" % (years[0], years[-1])
+
+    seeds = artists_in_playlists(client, playlists)
+    if not seeds:
+        raise SystemExit("Those playlists contain no resolvable artists.")
+
+    picked = []
+    for index, name in enumerate(sorted(set(seeds.values())), start=1):
+        if progress:
+            progress(index, len(set(seeds.values())), name)
+        if not name:
+            continue
+        query = 'artist:"%s" year:%s' % (name.replace('"', ""), span)
+        try:
+            tracks = client.search_tracks(query)
+        except Exception:
+            continue
+
+        seen_albums = set()
+        taken = 0
+        for track in tracks:
+            if taken >= per_artist:
+                break
+            album = track.get("album") or {}
+            released = parse_release_date(album.get("release_date"))
+            if not released or released < cutoff:
+                continue
+            if skip_reissues and _REISSUE.search(album.get("name", "")):
+                continue
+            credited = [a.get("name", "") for a in track.get("artists") or []]
+            if not any(_fold_name(c) == _fold_name(name) for c in credited):
+                continue
+            if album.get("id") in seen_albums:
+                continue
+            seen_albums.add(album.get("id"))
+            taken += 1
+            picked.append(
+                {
+                    "uri": track["uri"],
+                    "name": track["name"],
+                    "artist": name,
+                    "album": album.get("name", ""),
+                    "released": album.get("release_date", ""),
+                }
+            )
+
+    picked.sort(key=lambda t: t["released"] or "", reverse=True)
+    return _dedupe(picked)
+
+
+def _fold_name(name):
+    folded = unicodedata.normalize("NFKD", name or "")
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", "", folded.casefold())

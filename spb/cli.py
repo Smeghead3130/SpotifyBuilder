@@ -73,16 +73,35 @@ def cmd_playlists(args):
     return 0
 
 
+def _progress(done, total, name):
+    # One search per artist over a large library takes minutes; say so.
+    if done == 1 or done % 25 == 0 or done == total:
+        sys.stdout.write("\r  %d/%d artists  %-30.30s" % (done, total, name))
+        sys.stdout.flush()
+    if done == total:
+        sys.stdout.write("\n\n")
+
+
 def cmd_new_releases(args):
     client = _connect()
     seeds = _sources(client, args.source, "--source")
-    tracks = recipes.new_releases(
-        client,
-        seeds,
-        months=args.months,
-        per_album=args.per_album,
-        skip_reissues=not args.include_reissues,
-    )
+    if args.via_discography:
+        tracks = recipes.new_releases(
+            client,
+            seeds,
+            months=args.months,
+            per_album=args.per_album,
+            skip_reissues=not args.include_reissues,
+        )
+    else:
+        tracks = recipes.releases_by_search(
+            client,
+            seeds,
+            months=args.months,
+            per_artist=args.per_artist,
+            skip_reissues=not args.include_reissues,
+            progress=None if args.quiet else _progress,
+        )
     stamp = datetime.date.today().isoformat()
     return _emit(
         tracks,
@@ -222,6 +241,18 @@ def build_parser():
     new.add_argument("--months", type=int, default=12, help="window (default 12)")
     new.add_argument(
         "--per-album", type=int, help="cap tracks taken from each album"
+    )
+    new.add_argument(
+        "--per-artist", type=int, default=3,
+        help="how many recent tracks to take per artist (default 3)",
+    )
+    new.add_argument(
+        "--via-discography", action="store_true",
+        help="use /artists/{id}/albums instead of search; needs catalog "
+             "access, which Development mode apps do not have",
+    )
+    new.add_argument(
+        "--quiet", action="store_true", help="no progress line"
     )
     new.add_argument(
         "--include-reissues", action="store_true",

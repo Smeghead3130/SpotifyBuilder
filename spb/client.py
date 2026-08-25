@@ -180,6 +180,10 @@ class Spotify:
             page = self.get(nxt).get("artists") or {}
         return out
 
+    def search_tracks(self, query, limit=50):
+        page = self.get("/search", q=query, type="track", limit=limit)
+        return (page.get("tracks") or {}).get("items") or []
+
     def search_artists(self, query, limit=50, offset=0):
         page = self.get(
             "/search", q=query, type="artist", limit=limit, offset=offset
