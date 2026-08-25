@@ -156,5 +156,7 @@ def _short(exc):
 
 
 def write_profile(profile, path):
-    with open(path, "w") as fh:
+    # Windows defaults to cp1252, which cannot hold most artist names with
+    # diacritics; the file is JSON, so it must be UTF-8 regardless of locale.
+    with open(path, "w", encoding="utf-8") as fh:
         json.dump(profile, fh, indent=2, ensure_ascii=False)

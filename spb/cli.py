@@ -8,6 +8,20 @@ from . import auth, doctor, profile, recipes
 from .client import Spotify
 
 
+def _use_utf8_output():
+    """Console output must not die on an artist name.
+
+    Windows terminals default to cp1252, so printing a name like Sigur Ros
+    with its real spelling raises UnicodeEncodeError. Replace what the
+    terminal cannot show rather than crashing.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def _connect():
     return Spotify(auth.get_access_token())
 
@@ -239,6 +253,7 @@ def build_parser():
 
 
 def main(argv=None):
+    _use_utf8_output()
     args = build_parser().parse_args(argv)
     handlers = {
         "playlists": cmd_playlists,
