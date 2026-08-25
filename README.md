@@ -176,6 +176,25 @@ The two rule-based recipes above stay useful for the things that are pure
 bookkeeping — "what came out this year by people I already listen to" needs
 no taste, just an API. Use the chat loop for the judgement calls.
 
+## Caching
+
+Reading eight years of playlists on every run is wasteful, so results are
+cached at `~/.config/spb/cache.json`.
+
+Playlist contents are keyed by Spotify's `snapshot_id`, which changes whenever
+a playlist is edited. That makes a cache hit **exact** rather than a guess, so
+those entries never expire: finished year playlists are read once ever, while
+the year still being added to re-reads itself the moment it changes — and only
+that one.
+
+Search results have no equivalent marker, since new music appears constantly,
+so they expire after 7 days (`--search-ttl HOURS` to change it).
+
+```bash
+python -m spb.cli new-releases --no-cache     # ignore it for one run
+python -m spb.cli clear-cache                 # throw it away
+```
+
 ## Tests
 
 ```bash

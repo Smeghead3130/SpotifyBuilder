@@ -30,24 +30,20 @@ def auto_source_playlists(playlists):
     return sorted(hits, key=year_of, reverse=True)
 
 
-def build_profile(client, playlists):
+def build_profile(client, playlists, cache=None):
     """Everything Claude needs to reason about taste, as plain JSON."""
     seen_artists = {}
     playlist_blocks = []
 
+    from .recipes import playlist_artists
+
     for playlist in playlists:
-        tracks = client.playlist_tracks(playlist["id"])
-        names = {}
-        for track in tracks:
-            for artist in track.get("artists") or []:
-                if artist.get("id"):
-                    names[artist["id"]] = artist.get("name", "")
-                    seen_artists[artist["id"]] = artist.get("name", "")
+        names = playlist_artists(client, playlist, cache)
+        seen_artists.update(names)
         playlist_blocks.append(
             {
                 "name": playlist["name"],
                 "id": playlist["id"],
-                "track_count": len(tracks),
                 "artists": sorted(names.values()),
             }
         )

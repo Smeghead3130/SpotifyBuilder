@@ -5,6 +5,7 @@ import datetime
 import sys
 
 from . import auth, doctor, profile, recipes
+from .cache import Cache
 from .client import Spotify
 
 
@@ -24,6 +25,19 @@ def _use_utf8_output():
 
 def _connect():
     return Spotify(auth.get_access_token())
+
+
+def _cache(args, playlists=None):
+    """One cache per run; saved on the way out so a crash cannot corrupt it."""
+    cache = Cache(enabled=not getattr(args, "no_cache", False))
+    # Caching hangs entirely off snapshot_id. If Spotify stops returning it,
+    # say so rather than silently re-reading everything every run.
+    if cache.enabled and playlists and not any(
+        p.get("snapshot_id") for p in playlists
+    ):
+        print("Note: Spotify returned no snapshot_id, so playlists cannot be "
+              "cached and will be re-read each run.")
+    return cache
 
 
 def _emit(tracks, args, client, default_name, description):
@@ -94,6 +108,7 @@ def cmd_new_releases(args):
             skip_reissues=not args.include_reissues,
         )
     else:
+        cache = _cache(args, seeds)
         tracks = recipes.releases_by_search(
             client,
             seeds,
@@ -101,7 +116,12 @@ def cmd_new_releases(args):
             per_artist=args.per_artist,
             skip_reissues=not args.include_reissues,
             progress=None if args.quiet else _progress,
+            cache=cache,
+            search_ttl=args.search_ttl * 3600 if args.search_ttl else None,
         )
+        cache.save()
+        if cache.summary():
+            print(cache.summary() + "\n")
     stamp = datetime.date.today().isoformat()
     return _emit(
         tracks,
@@ -135,6 +155,14 @@ def cmd_discover(args):
     )
 
 
+def cmd_clear_cache(args):
+    cache = Cache()
+    path = cache.path
+    cache.clear()
+    print("Cleared " + path)
+    return 0
+
+
 def cmd_doctor(args):
     client = _connect()
     rows, ok = doctor.run(client, create_probe=args.write_test)
@@ -154,7 +182,11 @@ def cmd_export(args):
             )
         print("Auto-selected: " + ", ".join(p["name"] for p in chosen))
 
-    data = profile.build_profile(client, chosen)
+    cache = _cache(args, chosen)
+    data = profile.build_profile(client, chosen, cache)
+    cache.save()
+    if cache.summary():
+        print(cache.summary())
     profile.write_profile(data, args.out)
     print(
         "Wrote %s - %d playlists, %d artists, %d genres."
@@ -186,7 +218,9 @@ def cmd_build(args):
 
     if args.exclude_known:
         seeds = _sources(client, args.exclude, "--exclude")
-        known = recipes.artists_in_playlists(client, seeds)
+        cache = _cache(args, seeds)
+        known = recipes.artists_in_playlists(client, seeds, cache)
+        cache.save()
         found, dropped = profile.drop_known_artists(found, known.values())
         if dropped:
             print("Dropped %d pick(s) by artists already in your playlists:"
@@ -219,8 +253,16 @@ def build_parser():
     shared.add_argument(
         "--dry-run", action="store_true", help="print the tracks, write nothing"
     )
+    shared.add_argument(
+        "--no-cache", action="store_true",
+        help="ignore the cache and re-read everything from Spotify",
+    )
 
     subparsers.add_parser("playlists", help="list your playlists and their ids")
+
+    subparsers.add_parser(
+        "clear-cache", help="delete the cached playlist and search data"
+    )
 
     doc = subparsers.add_parser(
         "doctor", help="probe which Spotify endpoints this app can still use"
@@ -255,6 +297,10 @@ def build_parser():
         "--quiet", action="store_true", help="no progress line"
     )
     new.add_argument(
+        "--search-ttl", type=int, metavar="HOURS",
+        help="how long cached searches stay fresh (default 168 = 7 days)",
+    )
+    new.add_argument(
         "--include-reissues", action="store_true",
         help="keep remasters, anniversary and deluxe editions",
     )
@@ -282,6 +328,10 @@ def build_parser():
         help="playlist to profile; defaults to your 'listened to' playlists",
     )
     exp.add_argument("--out", default="profile.json", help="output path")
+    exp.add_argument(
+        "--no-cache", action="store_true",
+        help="ignore the cache and re-read everything from Spotify",
+    )
 
     bld = subparsers.add_parser(
         "build", parents=[shared], help="create a playlist from an 'Artist - Title' list"
@@ -310,6 +360,7 @@ def main(argv=None):
         "playlists": cmd_playlists,
         "new-releases": cmd_new_releases,
         "discover": cmd_discover,
+        "clear-cache": cmd_clear_cache,
         "doctor": cmd_doctor,
         "export": cmd_export,
         "build": cmd_build,

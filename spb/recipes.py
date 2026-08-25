@@ -65,24 +65,49 @@ def resolve_playlists(client, selectors):
     return resolved
 
 
-def artists_in_playlists(client, playlists):
+def playlist_artists(client, playlist, cache=None):
+    """{artist_id: name} for one playlist, cached against its snapshot_id.
+
+    Spotify changes snapshot_id whenever a playlist is edited, so a cached
+    entry under the current snapshot is exact and never needs expiring. A
+    finished year playlist hits cache forever; the one still being added to
+    re-reads itself only once it actually changes.
+    """
+    snapshot = playlist.get("snapshot_id")
+    key = "pl-artists:%s:%s" % (playlist["id"], snapshot) if snapshot else None
+
+    if key and cache is not None:
+        hit = cache.get(key)
+        if hit is not None:
+            return dict(hit)
+
+    artists = {}
+    for track in client.playlist_tracks(playlist["id"]):
+        for artist in track.get("artists") or []:
+            if artist.get("id"):
+                artists[artist["id"]] = artist.get("name", "")
+
+    if key and cache is not None:
+        cache.set(key, artists)
+    return artists
+
+
+def artists_in_playlists(client, playlists, cache=None):
     """{artist_id: name} across every track of every given playlist."""
     artists = {}
     for playlist in playlists:
-        for track in client.playlist_tracks(playlist["id"]):
-            for artist in track.get("artists") or []:
-                if artist.get("id"):
-                    artists[artist["id"]] = artist.get("name", "")
+        artists.update(playlist_artists(client, playlist, cache))
     return artists
 
 
 # ---- recipe 1: new releases -----------------------------------------
 
 
-def new_releases(client, playlists, months=12, per_album=None, skip_reissues=True):
+def new_releases(client, playlists, months=12, per_album=None,
+                 skip_reissues=True, cache=None):
     """Tracks from albums/singles released in the window by the seed artists."""
     cutoff = months_ago(months)
-    seeds = artists_in_playlists(client, playlists)
+    seeds = artists_in_playlists(client, playlists, cache)
     if not seeds:
         raise SystemExit("Those playlists contain no resolvable artists.")
 
@@ -195,7 +220,8 @@ def _dedupe(tracks):
 
 
 def releases_by_search(client, playlists, months=12, per_artist=3,
-                       skip_reissues=True, progress=None, today=None):
+                       skip_reissues=True, progress=None, today=None,
+                       cache=None, search_ttl=None):
     """New releases by artists you already have, found via track search.
 
     The discography endpoint (/artists/{id}/albums) is closed to Development
@@ -207,10 +233,12 @@ def releases_by_search(client, playlists, months=12, per_artist=3,
     years = sorted({cutoff.year, today.year})
     span = str(years[0]) if len(years) == 1 else "%d-%d" % (years[0], years[-1])
 
-    seeds = artists_in_playlists(client, playlists)
+    seeds = artists_in_playlists(client, playlists, cache)
     if not seeds:
         raise SystemExit("Those playlists contain no resolvable artists.")
 
+    from .cache import DEFAULT_TTL
+    ttl = DEFAULT_TTL if search_ttl is None else search_ttl
     picked = []
     for index, name in enumerate(sorted(set(seeds.values())), start=1):
         if progress:
@@ -218,10 +246,17 @@ def releases_by_search(client, playlists, months=12, per_artist=3,
         if not name:
             continue
         query = 'artist:"%s" year:%s' % (name.replace('"', ""), span)
-        try:
-            tracks = client.search_tracks(query)
-        except Exception:
-            continue
+        # Unlike playlists, a search has no snapshot to key on - new music
+        # appears constantly - so these entries expire on age.
+        key = "search:" + query
+        tracks = cache.get(key, ttl=ttl) if cache is not None else None
+        if tracks is None:
+            try:
+                tracks = client.search_tracks(query)
+            except Exception:
+                continue
+            if cache is not None:
+                cache.set(key, tracks)
 
         seen_albums = set()
         taken = 0
